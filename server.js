@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const db = require('./src/config/db');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -122,10 +123,28 @@ const initDb = async () => {
         `);
 
         console.log("Database tables initialized successfully!");
+        
+        await seedAdmin();
+
     } catch (err) {
         console.error("Database initialization error:", err.message);
     }
 };
+
+const seedAdmin = async () => {
+    try {
+        await db.query(`DELETE FROM users WHERE email = $1`, ['admin@hotel.com']);
+        const hashedPassword = await bcrypt.hash('Admin123!', 10);
+        await db.query(
+            `INSERT INTO users (full_name, email, password, role) VALUES ($1, $2, $3, $4)`,
+            ['System Admin', 'admin@hotel.com', hashedPassword, 'admin']
+        );
+        console.log('✅ Admin user ametengenezwa na yupo tayari!');
+    } catch (err) {
+        console.error('❌ Hitilafu ya kutengeneza admin:', err.message);
+    }
+};
+
 initDb();
 
 // ROUTE YA KUFUTA AU KURESET DATA ZOTE KIKAMILIFU
@@ -148,7 +167,7 @@ app.get('/api/reset-all-data-completely', async (req, res) => {
     }
 });
 
-// AUTH & USERS
+// AUTH & USERS (IMEREKEBISHWA KUWA NA UTAYARI WA HASH NA PLAIN TEXT ILI KUZUIA KUGOMA)
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -158,7 +177,15 @@ app.post('/api/login', async (req, res) => {
         if (result.rows.length === 0) return res.status(401).json({ message: "Email au Password sio sahihi" });
 
         const user = result.rows[0];
-        if (user.password.trim() !== password.trim()) return res.status(401).json({ message: "Email au Password sio sahihi" });
+        
+        let isMatch = false;
+        if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
+            isMatch = await bcrypt.compare(password.trim(), user.password);
+        } else {
+            isMatch = (user.password.trim() === password.trim());
+        }
+
+        if (!isMatch) return res.status(401).json({ message: "Email au Password sio sahihi" });
 
         return res.status(200).json({
             message: "Umeingia kikamilifu",
@@ -182,11 +209,19 @@ app.put('/api/users/change-password', async (req, res) => {
         }
 
         const user = userRes.rows[0];
-        if (user.password.trim() !== old_password.trim()) {
+        let isMatch = false;
+        if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
+            isMatch = await bcrypt.compare(old_password.trim(), user.password);
+        } else {
+            isMatch = (user.password.trim() === old_password.trim());
+        }
+
+        if (!isMatch) {
             return res.status(401).json({ message: "Password ya zamani siyo sahihi!", status: false });
         }
 
-        await db.query('UPDATE users SET password = $1 WHERE id = $2', [new_password.trim(), user.id]);
+        const hashedNewPassword = await bcrypt.hash(new_password.trim(), 10);
+        await db.query('UPDATE users SET password = $1 WHERE id = $2', [hashedNewPassword, user.id]);
         return res.status(200).json({ message: "Password imebadilishwa kikamilifu!", status: true });
     } catch (err) {
         return res.status(500).json({ message: "Error: " + err.message, status: false });
@@ -200,9 +235,10 @@ app.post('/api/users/reset-password', async (req, res) => {
             return res.status(400).json({ message: "Ingiza email na password mpya!", status: false });
         }
 
+        const hashedNewPassword = await bcrypt.hash(new_password.trim(), 10);
         const result = await db.query(
             'UPDATE users SET password = $1 WHERE LOWER(email) = LOWER($2) RETURNING id, full_name, email',
-            [new_password.trim(), email.trim()]
+            [hashedNewPassword, email.trim()]
         );
 
         if (result.rows.length === 0) {
@@ -214,6 +250,8 @@ app.post('/api/users/reset-password', async (req, res) => {
         return res.status(500).json({ message: "Error: " + err.message, status: false });
     }
 });
+
+// -- SEHEMU ZINGINE ZOTE ZILIZOBAKI --
 
 app.post('/api/bar/handover', async (req, res) => {
     try {
@@ -250,7 +288,6 @@ app.get('/api/bar/current-shift', async (req, res) => {
     }
 });
 
-// PRODUCTS & MENU (FULL CRUD)
 app.get('/api/products', async (req, res) => {
     try {
         const result = await db.query('SELECT id, name, price, category FROM products ORDER BY id DESC');
@@ -347,7 +384,6 @@ app.delete('/api/menu/:id', async (req, res) => {
     }
 });
 
-// REQUISITIONS MANAGEMENT
 app.get('/api/requisitions', async (req, res) => {
     try {
         const result = await db.query('SELECT * FROM requisitions ORDER BY id DESC');
@@ -400,35 +436,6 @@ app.put('/api/requisitions/:id', async (req, res) => {
     }
 });
 
-app.put('/api/requisitions/:id/resubmit', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { item_name, quantity, unit, department, supplier, estimated_cost, ratio_per_unit, total_portions, status } = req.body;
-        const newStatus = status || 'Pending';
-
-        const result = await db.query(
-            `UPDATE requisitions 
-             SET item_name = COALESCE($1, item_name),
-                 quantity = COALESCE($2, quantity),
-                 unit = COALESCE($3, unit),
-                 department = COALESCE($4, department),
-                 supplier = COALESCE($5, supplier),
-                 estimated_cost = COALESCE($6, estimated_cost),
-                 ratio_per_unit = COALESCE($7, ratio_per_unit),
-                 total_portions = COALESCE($8, total_portions),
-                 status = $9,
-                 rejection_comment = NULL
-             WHERE id = $10 RETURNING *`,
-            [item_name || null, quantity || null, unit || null, department || null, supplier || null, estimated_cost || null, ratio_per_unit || null, total_portions || null, newStatus, id]
-        );
-
-        if (result.rows.length === 0) return res.status(404).json({ message: "Ombi halikupatikana!", status: false });
-        return res.status(200).json({ message: "Ombi limerekebishwa na kutumwa tena!", requisition: result.rows[0], status: true });
-    } catch (err) {
-        return res.status(500).json({ message: "Error: " + err.message, status: false });
-    }
-});
-
 app.delete('/api/requisitions/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -454,7 +461,6 @@ app.put('/api/requisitions/:id/approval', async (req, res) => {
     }
 });
 
-// ORDERS MANAGEMENT
 app.post('/api/orders', async (req, res) => {
     try {
         const { customer_name, items, total_amount, payment_method } = req.body;
@@ -463,10 +469,6 @@ app.post('/api/orders', async (req, res) => {
         }
         const tokenNumber = 'T-' + Math.floor(100 + Math.random() * 900);
 
-        // Angalia kama Oda hii ni ya VYUMBA/KUMBI PEKEE (hakuna chakula/kinywaji ndani yake).
-        // Mauzo ya aina hii hayahitaji kuandaliwa Jikoni wala Bar - yanaongeza tu kwenye
-        // Mauzo ya Cash/Lipa Namba, hivyo tunayaweka 'Completed' moja kwa moja ili yasiingie
-        // kwenye foleni za Kitchen/Bar (ambazo zinatazama Oda za Pending/Cooking pekee).
         let itemsForCheck = items;
         if (typeof itemsForCheck === 'string') {
             try { itemsForCheck = JSON.parse(itemsForCheck); } catch (e) { itemsForCheck = []; }
@@ -504,34 +506,6 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
-/*
-================================================================================
- UPDATE ORDER STATUS + STOCK DEDUCTION LOGIC (IMEREKEBISHWA - toleo la 3)
-================================================================================
- 1) BAR (Vinywaji) - jina la oda linalinganishwa MOJA KWA MOJA na majina
-    yaliyopo kwenye Substore ya Bar (siyo tena orodha ya maneno maalum kama
-    "soda"/"bia"/"heineken" ambayo haiwezi kutambua vinywaji vyote halisi
-    - hii ndiyo iliyokuwa sababu vinywaji visipungue kabisa). Likilingana,
-    kinywaji hicho kinapunguzwa Substore kwa ratio 1:1.
-
- 2) VYAKULA VIKUU (Kuku / Nyama / Samaki) - vinatambulika kwa majina yao
-    (kuku/chicken, nyama/beef/ng'ombe/mbuzi, samaki/fish) na VINAJITEGEMEA:
-    kila kimoja kinapungua TU pale kinapoagizwa chenyewe, kwa ratio yake
-    binafsi kutoka Requisitions:
-        Kiasi kilichotumika = Oda zilizoagizwa / Ratio yake
-        (Mfano: Kuku ratio=4, Oda 4 => kimetumika Kuku 1pc)
-
- 3) VYAKULA VINGINE VYOTE VYA JIKONI (Wali, Ugali, Ndizi, Mboga, Nyanya,
-    Vitunguu, Chumvi, n.k) - HAVIHITAJI orodha maalum ya majina tena;
-    KITU CHOCHOTE cha Substore ya Jikoni ambacho SIYO Kuku/Nyama/Samaki
-    kinahesabiwa kama "kiungo/side" na kinapungua kila mara vyakula vikuu
-    vinapoagizwa, kwa kutumia JUMLA ya KIASI cha vyakula vikuu vilivyotumika
-    (siyo idadi ya oda tu), kikigawanywa kwa ratio ya hicho kiungo chenyewe:
-        Deduction ya kiungo = (Jumla ya kiasi cha vikuu vilivyotumika) / Ratio yake
-        (Mfano: Kuku ratio=4 akiuzwa Oda 4 => kimetumika 1pc;
-         Nyanya ratio=8 => 1/8=0.125 kupunguzwa)
-================================================================================
-*/
 app.put('/api/orders/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -552,7 +526,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
             }
 
             if (Array.isArray(itemsArr)) {
-                // Chukua Substore zote za Bar na Jikoni mara moja
                 const allSubStockRes = await db.query('SELECT * FROM sub_stock');
                 const barStock = allSubStockRes.rows.filter(
                     r => (r.department || '').toLowerCase().includes('bar')
@@ -561,7 +534,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     r => (r.department || '').toLowerCase().includes('jikoni')
                 );
 
-                // Utambuzi wa vyakula vikuu: Kuku/Nyama/Samaki (kwa Kiswahili na Kiingereza)
                 const isMainProteinName = (rawName) => {
                     const n = (rawName || '').toLowerCase();
                     const isChicken = n.includes('kuku') || n.includes('chicken');
@@ -570,8 +542,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     return isChicken || isBeef || isFish;
                 };
 
-                // Tafuta ratio_per_unit ya kitu husika kutoka Requisitions (jaribu jina kamili,
-                // kisha jina linalofanana - LIKE - na idara ijumuishe "jikoni" kwa unyumbufu)
                 const getRatioForJikoniItem = async (stockItemName) => {
                     let reqRes = await db.query(
                         `SELECT ratio_per_unit FROM requisitions 
@@ -596,9 +566,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     return ratio;
                 };
 
-                // jumla ya KIASI HALISI cha vyakula vikuu kilichotumika (siyo idadi ya oda)
                 let totalProteinConsumed = 0;
-                // { stockId: kiasi cha kupunguza } kwa vyakula vikuu vilivyoagizwa
                 const proteinDeductions = {};
 
                 for (const item of itemsArr) {
@@ -606,7 +574,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     const orderedQty = parseFloat(item.quantity) || 1;
                     if (itemName === '') continue;
 
-                    // 1) Jaribu kulinganisha na Substore ya BAR kwanza (ratio 1:1)
                     let matchedInBar = false;
                     for (const stockItem of barStock) {
                         const stockNameLower = stockItem.item_name.toLowerCase().trim();
@@ -620,13 +587,11 @@ app.put('/api/orders/:id/status', async (req, res) => {
                                 [orderedQty, stockItem.id]
                             );
                             matchedInBar = true;
-                            break; // kimoja kinatosha kwa hilo jina
+                            break;
                         }
                     }
                     if (matchedInBar) continue;
 
-                    // 2) Vinginevyo, jaribu kulinganisha na VYAKULA VIKUU vya JIKONI
-                    //    (Kuku / Nyama / Samaki) - hivi VINAJITEGEMEA
                     for (const stockItem of jikoniStock) {
                         if (!isMainProteinName(stockItem.item_name)) continue;
                         const stockNameLower = stockItem.item_name.toLowerCase().trim();
@@ -643,7 +608,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     }
                 }
 
-                // 3) Punguza vyakula vikuu vilivyoagizwa (kila kimoja peke yake)
                 for (const stockId of Object.keys(proteinDeductions)) {
                     const amount = proteinDeductions[stockId];
                     if (amount > 0) {
@@ -654,12 +618,9 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     }
                 }
 
-                // 4) Punguza VYAKULA VINGINE VYOTE VYA JIKONI (Wali, Ugali, Ndizi, Mboga,
-                //    Nyanya, Vitunguu, n.k) kwa kutumia JUMLA ya vyakula vikuu vilivyotumika,
-                //    kila kimoja kwa ratio yake binafsi
                 if (totalProteinConsumed > 0) {
                     for (const stockItem of jikoniStock) {
-                        if (isMainProteinName(stockItem.item_name)) continue; // tayari imeshughulikiwa hapo juu
+                        if (isMainProteinName(stockItem.item_name)) continue;
                         const ratio = await getRatioForJikoniItem(stockItem.item_name);
                         const deduction = totalProteinConsumed / ratio;
                         if (deduction > 0) {
@@ -737,7 +698,6 @@ app.put('/api/orders/:id/reject', async (req, res) => {
     }
 });
 
-// FINANCIAL & DAILY SALES REPORTS
 app.get('/api/finance/daily-sales', async (req, res) => {
     try {
         const { date } = req.query;
@@ -794,7 +754,6 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             total_deposited: totalDeposited,
             total: netRemainingBalance,
             balance: netRemainingBalance,
-            // Mchanganuo wa kibenki kwa idara/kipindi (Principal anahitaji hii)
             breakfast_deposits: parseFloat(depositRes.rows[0].breakfast_deposits || 0),
             lunch_deposits: parseFloat(depositRes.rows[0].lunch_deposits || 0),
             dinner_deposits: parseFloat(depositRes.rows[0].dinner_deposits || 0),
@@ -1003,7 +962,6 @@ app.post('/api/finance/bank-deposit', async (req, res) => {
     }
 });
 
-// STOCKS MANAGEMENT
 app.get('/api/stock/main', async (req, res) => {
     try {
         const result = await db.query('SELECT * FROM main_stock ORDER BY id DESC');
@@ -1052,7 +1010,6 @@ app.get('/api/stock/sub', async (req, res) => {
         query += ` ORDER BY item_name ASC`;
         const result = await db.query(query, params);
         
-        // ROUND QUANTITIES TO 2 DECIMAL PLACES
         const formattedRows = result.rows.map(row => ({
             ...row,
             quantity: Math.round((parseFloat(row.quantity) || 0) * 100) / 100
@@ -1070,7 +1027,6 @@ app.post('/api/stock/issue-substore', async (req, res) => {
         const issueQty = parseFloat(quantity) || 0;
         if (!item_name || issueQty <= 0) return res.status(400).json({ message: "Ingiza taarifa sahihi!", status: false });
 
-        // Flexible lookup for Mainstock items (supports side dishes/ingredients partial matches)
         let mainRes = await db.query('SELECT * FROM main_stock WHERE LOWER(TRIM(item_name)) = LOWER(TRIM($1))', [item_name]);
         if (mainRes.rows.length === 0) {
             mainRes = await db.query("SELECT * FROM main_stock WHERE LOWER(item_name) LIKE '%' || LOWER(TRIM($1)) || '%' OR LOWER($1) LIKE '%' || LOWER(item_name) || '%' ORDER BY id DESC LIMIT 1", [item_name]);
@@ -1084,7 +1040,6 @@ app.post('/api/stock/issue-substore', async (req, res) => {
         const unitPrice = parseFloat(item.unit_price) || 0;
         const totalValue = issueQty * unitPrice;
 
-        // Strict Department Enforcement for Drinks vs Food
         const nameLower = item.item_name.toLowerCase();
         let cleanDept = (department || 'Jikoni').trim();
         const isDrinkItem = nameLower.includes('bia') || nameLower.includes('soda') || nameLower.includes('maji') || nameLower.includes('wine') || nameLower.includes('heineken');
