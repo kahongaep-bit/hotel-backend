@@ -167,7 +167,7 @@ app.get('/api/reset-all-data-completely', async (req, res) => {
     }
 });
 
-// AUTH & USERS (IMEREKEBISHWA KUWA NA UTAYARI WA HASH NA PLAIN TEXT ILI KUZUIA KUGOMA)
+// AUTH & USERS (IMEREKEBISHWA KUSAIDIA UTAYARI WA HASH NA PLAIN TEXT)
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -179,10 +179,10 @@ app.post('/api/login', async (req, res) => {
         const user = result.rows[0];
         
         let isMatch = false;
-        if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
+        if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
             isMatch = await bcrypt.compare(password.trim(), user.password);
         } else {
-            isMatch = (user.password.trim() === password.trim());
+            isMatch = (user.password && user.password.trim() === password.trim());
         }
 
         if (!isMatch) return res.status(401).json({ message: "Email au Password sio sahihi" });
@@ -210,10 +210,10 @@ app.put('/api/users/change-password', async (req, res) => {
 
         const user = userRes.rows[0];
         let isMatch = false;
-        if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
+        if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
             isMatch = await bcrypt.compare(old_password.trim(), user.password);
         } else {
-            isMatch = (user.password.trim() === old_password.trim());
+            isMatch = (user.password && user.password.trim() === old_password.trim());
         }
 
         if (!isMatch) {
