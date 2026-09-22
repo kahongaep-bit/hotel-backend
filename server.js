@@ -125,6 +125,7 @@ const initDb = async () => {
         console.log("Database tables initialized successfully!");
         
         await seedAdmin();
+        await seedDefaultUsers();
 
     } catch (err) {
         console.error("Database initialization error:", err.message);
@@ -145,7 +146,92 @@ const seedAdmin = async () => {
     }
 };
 
+// SEED DEFAULT USERS (Ili akaunti za majaribio ziwepo kwenye Railway pia)
+const seedDefaultUsers = async () => {
+    try {
+        const defaultUsers = [
+            { name: 'Hotel Manager', email: 'manager@hotel.com', pass: 'Manager123!', role: 'Manager' },
+            { name: 'Cashier Staff', email: 'cashier@hotel.com', pass: 'Cashier123!', role: 'Cashier' },
+            { name: 'Principal Officer', email: 'principal@hotel.com', pass: 'Principal123!', role: 'Principal' },
+            { name: 'Kitchen Staff', email: 'kitchen@hotel.com', pass: 'Kitchen123!', role: 'Kitchen' },
+            { name: 'Bartender Staff', email: 'bar@hotel.com', pass: 'Bar123!', role: 'Bartender' },
+            { name: 'Production Coordinator', email: 'production@hotel.com', pass: 'Production123!', role: 'Production' },
+            { name: 'Procurement Officer', email: 'procurement@hotel.com', pass: 'Procurement123!', role: 'Procurement' },
+            { name: 'Finance Accountant', email: 'finance@hotel.com', pass: 'Finance123!', role: 'Finance' }
+        ];
+
+        for (const u of defaultUsers) {
+            const check = await db.query('SELECT * FROM users WHERE email = $1', [u.email]);
+            if (check.rows.length === 0) {
+                const hashedPassword = await bcrypt.hash(u.pass, 10);
+                await db.query(
+                    'INSERT INTO users (full_name, email, password, role) VALUES ($1, $2, $3, $4)',
+                    [u.name, u.email, hashedPassword, u.role]
+                );
+            }
+        }
+        console.log('✅ Akaunti zote za majaribio zimewekwa kwenye database!');
+    } catch (err) {
+        console.error('❌ Hitilafu ya kuweka akaunti za majaribio:', err.message);
+    }
+};
+
 initDb();
+
+// ADMIN MANAGEMENT API ENDPOINTS
+app.get('/api/admin/users', async (req, res) => {
+    try {
+        const result = await db.query('SELECT id, full_name, email, role FROM users ORDER BY id ASC');
+        return res.status(200).json(result.rows);
+    } catch (err) {
+        return res.status(500).json({ message: "Error: " + err.message, status: false });
+    }
+});
+
+app.post('/api/admin/users', async (req, res) => {
+    try {
+        const { full_name, email, password, role } = req.body;
+        if (!full_name || !email || !password || !role) {
+            return res.status(400).json({ message: "Jaza taarifa zote za mtumiaji!", status: false });
+        }
+        const hashedPassword = await bcrypt.hash(password.trim(), 10);
+        const result = await db.query(
+            'INSERT INTO users (full_name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, full_name, email, role',
+            [full_name.trim(), email.trim(), hashedPassword, role.trim()]
+        );
+        return res.status(201).json({ message: "Mtumiaji ameongezwa kikamilifu!", user: result.rows[0], status: true });
+    } catch (err) {
+        return res.status(500).json({ message: "Error: " + err.message, status: false });
+    }
+});
+
+app.put('/api/admin/users/:id/role', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { role } = req.body;
+        if (!role) return res.status(400).json({ message: "Weka role mpya!", status: false });
+
+        const result = await db.query(
+            'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, full_name, email, role',
+            [role.trim(), id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ message: "Mtumiaji hajapatikana!", status: false });
+        return res.status(200).json({ message: "Role imebadilishwa kikamilifu!", user: result.rows[0], status: true });
+    } catch (err) {
+        return res.status(500).json({ message: "Error: " + err.message, status: false });
+    }
+});
+
+app.delete('/api/admin/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await db.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+        if (result.rows.length === 0) return res.status(404).json({ message: "Mtumiaji hajapatikana!", status: false });
+        return res.status(200).json({ message: "Mtumiaji amefutwa kikamilifu!", status: true });
+    } catch (err) {
+        return res.status(500).json({ message: "Error: " + err.message, status: false });
+    }
+});
 
 // ROUTE YA KUFUTA AU KURESET DATA ZOTE KIKAMILIFU
 app.get('/api/reset-all-data-completely', async (req, res) => {
@@ -167,7 +253,7 @@ app.get('/api/reset-all-data-completely', async (req, res) => {
     }
 });
 
-// AUTH & USERS (IMEREKEBISHWA KUSAIDIA UTAYARI WA HASH NA PLAIN TEXT)
+// AUTH & USERS
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
