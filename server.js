@@ -672,7 +672,7 @@ app.put('/api/orders/:id/reject', async (req, res) => {
     }
 });
 
-// FINANCE, DAILY SALES (WITH CORRECT TARGET DATE & BALANCES)
+// FINANCE, DAILY SALES (Sahihi kulingana na Logic yako ya Balance za Leo na Zilizopita)
 app.get('/api/finance/daily-sales', async (req, res) => {
     try {
         const targetDate = req.query.date;
@@ -728,7 +728,6 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             salesParams = [];
         }
 
-        // 2. Hesabu za Benki zilizowekwa leo au kwa tarehe husika
         let depositQuery;
         let depositParams = [];
         if (targetDate && targetDate.trim() !== '') {
@@ -756,9 +755,9 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         const grossTotal = parseFloat(salesRes.rows[0].total_sales || (cashSales + lipanambaSales));
         const totalDepositedToday = parseFloat(depositRes.rows[0].total_deposited || 0);
 
-        // 3. Kupata Balance Iliyopita (Carry Forward)
         const targetDateCondition = targetDate && targetDate.trim() !== '' ? `'${targetDate.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
         
+        // Kutafuta Salio lililopita (Previous Balance) kutoka siku zilizotangulia
         const prevBalQuery = `
             SELECT previous_balance, total_balance 
             FROM daily_previous_balances
@@ -785,11 +784,10 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         );
 
         const previousBalanceDisplay = Math.max(
-            totalBalance - todayBalance,
+            previousBalanceBase,
             0
         );
 
-        // 4. Kuhifadhi au kusasisha rasmi kwenye database
         const currentLocalDate = targetDate && targetDate.trim() !== '' ? targetDate.trim() : null;
         const upsertBalanceQuery = `
             INSERT INTO daily_previous_balances (balance_date, previous_balance, total_balance)
@@ -1088,9 +1086,9 @@ app.get('/api/reports/stock-issues', async (req, res) => {
     }
 });
 
-app.get('/api/reports/procured-items', async (resq, res) => {
+app.get('/api/reports/procured-items', async (req, res) => {
     try {
-        const { startDate, endDate } = resq.query;
+        const { startDate, endDate } = req.query;
         let query = "SELECT * FROM requisitions WHERE LOWER(status) IN ('procured', 'approved_principal')";
         const params = [];
 
