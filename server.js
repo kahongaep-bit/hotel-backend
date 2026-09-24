@@ -695,12 +695,22 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             WHERE LOWER(status) NOT LIKE '%rejected_by%' ${dateFilterSales}
         `;
 
-        const depositQuery = `
-            SELECT COALESCE(SUM(total_amount), 0) AS total_deposited
-            FROM bank_deposits
-            WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = ${date && date.trim() !== '' ? '$1' : '(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date'}
-        `;
-        const depositParams = date && date.trim() !== '' ? [date.trim()] : [];
+        let depositQuery = "";
+        let depositParams = [];
+        if (date && date.trim() !== '') {
+            depositQuery = `
+                SELECT COALESCE(SUM(total_amount), 0) AS total_deposited
+                FROM bank_deposits
+                WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1
+            `;
+            depositParams = [date.trim()];
+        } else {
+            depositQuery = `
+                SELECT COALESCE(SUM(total_amount), 0) AS total_deposited
+                FROM bank_deposits
+                WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+            `;
+        }
 
         const salesRes = await db.query(salesQuery, queryParamsSales);
         const depositRes = await db.query(depositQuery, depositParams);
@@ -712,7 +722,6 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         const totalDepositedToday = parseFloat(depositRes.rows[0].total_deposited || 0);
         const todayBalance = Math.max(grossTotal - totalDepositedToday, 0);
 
-        // Kupata Balance Iliyopita (Carry Forward kutoka siku ya mwisho iliyorekodiwa kabla ya leo)
         const targetDateCondition = date && date.trim() !== '' ? `'${date.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
         
         const prevBalQuery = `
@@ -731,7 +740,6 @@ app.get('/api/finance/daily-sales', async (req, res) => {
 
         const totalBalance = todayBalance + previousBalance;
 
-        // Kuhifadhi au kusasisha rasmi kumbukumbu ya siku ya leo kwenye database
         const currentLocalDate = date && date.trim() !== '' ? date.trim() : null;
         const upsertBalanceQuery = `
             INSERT INTO daily_previous_balances (balance_date, previous_balance, total_balance)
@@ -1029,9 +1037,9 @@ app.get('/api/reports/stock-issues', async (req, res) => {
     }
 });
 
-app.get('/api/reports/procured-items', async (req, res) => {
+app.get('/api/reports/procured-items', async (resq, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate } = resq.query;
         let query = "SELECT * FROM requisitions WHERE LOWER(status) IN ('procured', 'approved_principal')";
         const params = [];
 
