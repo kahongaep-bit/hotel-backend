@@ -672,7 +672,7 @@ app.put('/api/orders/:id/reject', async (req, res) => {
     }
 });
 
-// FINANCE, DAILY SALES (Sahihi kulingana na Logic yako ya Balance za Leo na Zilizopita)
+// FINANCE, DAILY SALES (Sahihi kulingana na Logic ya Balance na Bank Deposits)
 app.get('/api/finance/daily-sales', async (req, res) => {
     try {
         const targetDate = req.query.date;
@@ -757,7 +757,6 @@ app.get('/api/finance/daily-sales', async (req, res) => {
 
         const targetDateCondition = targetDate && targetDate.trim() !== '' ? `'${targetDate.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
         
-        // Kutafuta Salio lililopita (Previous Balance) kutoka siku zilizotangulia
         const prevBalQuery = `
             SELECT previous_balance, total_balance 
             FROM daily_previous_balances
@@ -955,6 +954,7 @@ app.get('/api/finance/reports', async (req, res) => {
     }
 });
 
+// BANK DEPOSITS ENDPOINTS (Zilizorekebishwa kupokea kupitia routes zote mbili)
 app.post('/api/finance/bank-deposit', async (req, res) => {
     try {
         const b = req.body || {};
@@ -970,11 +970,30 @@ app.post('/api/finance/bank-deposit', async (req, res) => {
         }
 
         const result = await db.query(
-            `INSERT INTO bank_deposits (amount, breakfast_amount, lunch_amount, dinner_amount, drinks_amount, rooms_amount, total_amount, deposited_by) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+            `INSERT INTO bank_deposits (amount, breakfast_amount, lunch_amount, dinner_amount, drinks_amount, rooms_amount, total_amount, deposited_by, created_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP) RETURNING *`,
             [requestedDeposit, breakfast, lunch, dinner, drinks, rooms, requestedDeposit, b.deposited_by || 'Cashier']
         );
 
+        return res.status(201).json({ message: "Pesa zimeingia benki kikamilifu!", deposit: result.rows[0], status: true });
+    } catch (err) {
+        return res.status(500).json({ message: "Error: " + err.message, status: false });
+    }
+});
+
+app.post('/api/deposits', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const requestedDeposit = parseFloat(b.total_amount || b.amount) || 0;
+        if (requestedDeposit <= 0) {
+            return res.status(400).json({ message: "Ingiza kiasi sahihi cha deposit!", status: false });
+        }
+
+        const result = await db.query(
+            `INSERT INTO bank_deposits (amount, total_amount, deposited_by, created_at) 
+             VALUES ($1, $1, $2, CURRENT_TIMESTAMP) RETURNING *`,
+            [requestedDeposit, b.deposited_by || 'Cashier']
+        );
         return res.status(201).json({ message: "Pesa zimeingia benki kikamilifu!", deposit: result.rows[0], status: true });
     } catch (err) {
         return res.status(500).json({ message: "Error: " + err.message, status: false });
