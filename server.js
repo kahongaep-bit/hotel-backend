@@ -59,6 +59,7 @@ const initDb = async () => {
                 id SERIAL PRIMARY KEY,
                 balance_date DATE UNIQUE NOT NULL,
                 previous_balance NUMERIC DEFAULT 0,
+                total_balance NUMERIC DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -127,6 +128,7 @@ const initDb = async () => {
             ALTER TABLE requisitions ADD COLUMN IF NOT EXISTS ratio_per_unit NUMERIC DEFAULT 1;
             ALTER TABLE requisitions ADD COLUMN IF NOT EXISTS total_portions NUMERIC DEFAULT 0;
             ALTER TABLE stock_issues ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE daily_previous_balances ADD COLUMN IF NOT EXISTS total_balance NUMERIC DEFAULT 0;
         `);
 
         console.log("Database tables initialized successfully!");
@@ -602,7 +604,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
             if (Array.isArray(itemsArr)) {
                 const allSubStockRes = await db.query('SELECT * FROM sub_stock');
                 const barStock = allSubStockRes.rows.filter(r => (r.department || '').toLowerCase().includes('bar'));
-                const jikoniStock = allSubStockRes.rows.filter(r => (r.department || '').toLowerCase().includes('jikoni'));
 
                 for (const item of itemsArr) {
                     const itemName = (item.name || '').toLowerCase().trim();
@@ -630,7 +631,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
 app.put('/api/orders/:id/resubmit', async (req, res) => {
     try {
         const { id } = req.params;
-        const { customer_name, items, total_amount, payment_method, department } = req.body;
+        const { customer_name, items, total_amount, payment_method } = req.body;
 
         const existingOrderRes = await db.query('SELECT * FROM orders WHERE id = $1', [id]);
         if (existingOrderRes.rows.length === 0) return res.status(404).json({ message: "Oda haikupatikana!", status: false });
@@ -671,7 +672,7 @@ app.put('/api/orders/:id/reject', async (req, res) => {
     }
 });
 
-// FINANCE, DAILY SALES (WITH 3 BALANCES) & REPORTS
+// FINANCE, DAILY SALES (WITH 3 BALANCES & CARRY FORWARD LOGIC)
 app.get('/api/finance/daily-sales', async (req, res) => {
     try {
         const { date } = req.query;
@@ -697,17 +698,12 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         const depositQuery = `
             SELECT COALESCE(SUM(total_amount), 0) AS total_deposited
             FROM bank_deposits
-            WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+            WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = ${date && date.trim() !== '' ? '$1' : '(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date'}
         `;
-
-        const prevBalQuery = `
-            SELECT COALESCE(SUM(previous_balance), 0) AS prev_bal FROM daily_previous_balances
-            WHERE balance_date < (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date
-        `;
+        const depositParams = date && date.trim() !== '' ? [date.trim()] : [];
 
         const salesRes = await db.query(salesQuery, queryParamsSales);
-        const depositRes = await db.query(depositQuery);
-        const prevBalRes = await db.query(prevBalQuery);
+        const depositRes = await db.query(depositQuery, depositParams);
 
         const cashSales = parseFloat(salesRes.rows[0].cash_sales || 0);
         const lipanambaSales = parseFloat(salesRes.rows[0].lipanamba_sales || 0);
@@ -715,8 +711,36 @@ app.get('/api/finance/daily-sales', async (req, res) => {
 
         const totalDepositedToday = parseFloat(depositRes.rows[0].total_deposited || 0);
         const todayBalance = Math.max(grossTotal - totalDepositedToday, 0);
-        let previousBalance = parseFloat(prevBalRes.rows[0].prev_bal || 0);
+
+        // Kupata Balance Iliyopita (Carry Forward kutoka siku ya mwisho iliyorekodiwa kabla ya leo)
+        const targetDateCondition = date && date.trim() !== '' ? `'${date.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
+        
+        const prevBalQuery = `
+            SELECT previous_balance, total_balance 
+            FROM daily_previous_balances
+            WHERE balance_date < ${targetDateCondition}
+            ORDER BY balance_date DESC
+            LIMIT 1
+        `;
+        const prevBalRes = await db.query(prevBalQuery);
+
+        let previousBalance = 0;
+        if (prevBalRes.rows.length > 0) {
+            previousBalance = parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0);
+        }
+
         const totalBalance = todayBalance + previousBalance;
+
+        // Kuhifadhi au kusasisha rasmi kumbukumbu ya siku ya leo kwenye database
+        const currentLocalDate = date && date.trim() !== '' ? date.trim() : null;
+        const upsertBalanceQuery = `
+            INSERT INTO daily_previous_balances (balance_date, previous_balance, total_balance)
+            VALUES (COALESCE(${currentLocalDate ? `'${currentLocalDate}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`}), $1, $2)
+            ON CONFLICT (balance_date) 
+            DO UPDATE SET previous_balance = $1, total_balance = $2
+        `;
+        
+        await db.query(upsertBalanceQuery, [previousBalance, totalBalance]);
 
         return res.status(200).json({
             cash_sales: cashSales,
