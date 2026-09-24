@@ -720,7 +720,6 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         const grossTotal = parseFloat(salesRes.rows[0].total_sales || (cashSales + lipanambaSales));
 
         const totalDepositedToday = parseFloat(depositRes.rows[0].total_deposited || 0);
-        const todayBalance = Math.max(grossTotal - totalDepositedToday, 0);
 
         const targetDateCondition = date && date.trim() !== '' ? `'${date.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
         
@@ -733,12 +732,25 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         `;
         const prevBalRes = await db.query(prevBalQuery);
 
-        let previousBalance = 0;
+        let previousBalanceBase = 0;
         if (prevBalRes.rows.length > 0) {
-            previousBalance = parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0);
+            previousBalanceBase = parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0);
         }
 
-        const totalBalance = todayBalance + previousBalance;
+        // KIASI HALISI CHA LEO: kinaweza kuwa hasi endapo kiasi kilichowekwa Benki
+        // (deposited) kimezidi mauzo ya leo (gross) - ziada hiyo INAPASWA kupunguza
+        // Balance Iliyopita (carry-forward), siyo kupotea tu kwa ku-floor kwenye 0.
+        const rawTodayNet = grossTotal - totalDepositedToday;
+
+        // Jumla ya Balance = Iliyopita (msingi) + Kiasi halisi cha leo (hasi au chanya)
+        const totalBalance = Math.max(previousBalanceBase + rawTodayNet, 0);
+
+        // Balance ya LEO haionyeshwi chini ya sifuri kamwe
+        const todayBalance = Math.max(rawTodayNet, 0);
+
+        // Balance ILIYOPITA inayoonyeshwa = Jumla - Leo (hivyo ziada ya malipo ya leo
+        // inapunguza hii moja kwa moja, kama ilivyoainishwa)
+        const previousBalanceDisplay = Math.max(totalBalance - todayBalance, 0);
 
         const currentLocalDate = date && date.trim() !== '' ? date.trim() : null;
         const upsertBalanceQuery = `
@@ -748,7 +760,7 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             DO UPDATE SET previous_balance = $1, total_balance = $2
         `;
         
-        await db.query(upsertBalanceQuery, [previousBalance, totalBalance]);
+        await db.query(upsertBalanceQuery, [previousBalanceDisplay, totalBalance]);
 
         return res.status(200).json({
             cash_sales: cashSales,
@@ -756,7 +768,7 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             gross_total: grossTotal,
             total_deposited: totalDepositedToday,
             today_balance: todayBalance,
-            previous_balance: previousBalance,
+            previous_balance: previousBalanceDisplay,
             total: totalBalance,
             balance: totalBalance
         });
