@@ -672,56 +672,92 @@ app.put('/api/orders/:id/reject', async (req, res) => {
     }
 });
 
-// FINANCE, DAILY SALES (WITH 3 BALANCES & CARRY FORWARD LOGIC)
+// FINANCE, DAILY SALES (WITH CORRECT TARGET DATE & BALANCES)
 app.get('/api/finance/daily-sales', async (req, res) => {
     try {
-        const { date } = req.query;
-        let dateFilterSales = "";
-        const queryParamsSales = [];
+        const targetDate = req.query.date;
+        let salesQuery;
+        let salesParams = [];
 
-        if (date && date.trim() !== '') {
-            dateFilterSales = ` AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1`;
-            queryParamsSales.push(date.trim());
+        if (targetDate && targetDate.trim() !== '') {
+            salesQuery = `
+                SELECT
+                    COALESCE(SUM(total_amount), 0) AS total_sales,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(payment_method, 'Cash'))) LIKE '%cash%'
+                            THEN total_amount
+                            ELSE 0
+                        END
+                    ), 0) AS cash_sales,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(payment_method, 'Cash'))) NOT LIKE '%cash%'
+                            THEN total_amount
+                            ELSE 0
+                        END
+                    ), 0) AS lipanamba_sales
+                FROM orders
+                WHERE LOWER(status) NOT LIKE '%rejected_by%'
+                  AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1::date
+            `;
+            salesParams = [targetDate.trim()];
         } else {
-            dateFilterSales = ` AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
+            salesQuery = `
+                SELECT
+                    COALESCE(SUM(total_amount), 0) AS total_sales,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(payment_method, 'Cash'))) LIKE '%cash%'
+                            THEN total_amount
+                            ELSE 0
+                        END
+                    ), 0) AS cash_sales,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(payment_method, 'Cash'))) NOT LIKE '%cash%'
+                            THEN total_amount
+                            ELSE 0
+                        END
+                    ), 0) AS lipanamba_sales
+                FROM orders
+                WHERE LOWER(status) NOT LIKE '%rejected_by%'
+                  AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date =
+                      (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+            `;
+            salesParams = [];
         }
 
-        const salesQuery = `
-            SELECT 
-                COALESCE(SUM(total_amount), 0) AS total_sales,
-                COALESCE(SUM(CASE WHEN LOWER(TRIM(payment_method)) LIKE '%cash%' THEN total_amount ELSE 0 END), 0) AS cash_sales,
-                COALESCE(SUM(CASE WHEN LOWER(TRIM(payment_method)) NOT LIKE '%cash%' THEN total_amount ELSE 0 END), 0) AS lipanamba_sales
-            FROM orders 
-            WHERE LOWER(status) NOT LIKE '%rejected_by%' ${dateFilterSales}
-        `;
-
-        let depositQuery = "";
+        // 2. Hesabu za Benki zilizowekwa leo au kwa tarehe husika
+        let depositQuery;
         let depositParams = [];
-        if (date && date.trim() !== '') {
+        if (targetDate && targetDate.trim() !== '') {
             depositQuery = `
                 SELECT COALESCE(SUM(total_amount), 0) AS total_deposited
                 FROM bank_deposits
-                WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1
+                WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1::date
             `;
-            depositParams = [date.trim()];
+            depositParams = [targetDate.trim()];
         } else {
             depositQuery = `
                 SELECT COALESCE(SUM(total_amount), 0) AS total_deposited
                 FROM bank_deposits
-                WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+                WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = 
+                      (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date
             `;
+            depositParams = [];
         }
 
-        const salesRes = await db.query(salesQuery, queryParamsSales);
+        const salesRes = await db.query(salesQuery, salesParams);
         const depositRes = await db.query(depositQuery, depositParams);
 
         const cashSales = parseFloat(salesRes.rows[0].cash_sales || 0);
         const lipanambaSales = parseFloat(salesRes.rows[0].lipanamba_sales || 0);
         const grossTotal = parseFloat(salesRes.rows[0].total_sales || (cashSales + lipanambaSales));
-
         const totalDepositedToday = parseFloat(depositRes.rows[0].total_deposited || 0);
 
-        const targetDateCondition = date && date.trim() !== '' ? `'${date.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
+        // 3. Kupata Balance Iliyopita (Carry Forward)
+        const targetDateCondition = targetDate && targetDate.trim() !== '' ? `'${targetDate.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
         
         const prevBalQuery = `
             SELECT previous_balance, total_balance 
@@ -732,27 +768,29 @@ app.get('/api/finance/daily-sales', async (req, res) => {
         `;
         const prevBalRes = await db.query(prevBalQuery);
 
-        let previousBalanceBase = 0;
-        if (prevBalRes.rows.length > 0) {
-            previousBalanceBase = parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0);
-        }
+        const previousBalanceBase = prevBalRes.rows.length > 0
+            ? parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0)
+            : 0;
 
-        // KIASI HALISI CHA LEO: kinaweza kuwa hasi endapo kiasi kilichowekwa Benki
-        // (deposited) kimezidi mauzo ya leo (gross) - ziada hiyo INAPASWA kupunguza
-        // Balance Iliyopita (carry-forward), siyo kupotea tu kwa ku-floor kwenye 0.
-        const rawTodayNet = grossTotal - totalDepositedToday;
+        const rawTodayBalance = grossTotal - totalDepositedToday;
 
-        // Jumla ya Balance = Iliyopita (msingi) + Kiasi halisi cha leo (hasi au chanya)
-        const totalBalance = Math.max(previousBalanceBase + rawTodayNet, 0);
+        const totalBalance = Math.max(
+            previousBalanceBase + rawTodayBalance,
+            0
+        );
 
-        // Balance ya LEO haionyeshwi chini ya sifuri kamwe
-        const todayBalance = Math.max(rawTodayNet, 0);
+        const todayBalance = Math.max(
+            rawTodayBalance,
+            0
+        );
 
-        // Balance ILIYOPITA inayoonyeshwa = Jumla - Leo (hivyo ziada ya malipo ya leo
-        // inapunguza hii moja kwa moja, kama ilivyoainishwa)
-        const previousBalanceDisplay = Math.max(totalBalance - todayBalance, 0);
+        const previousBalanceDisplay = Math.max(
+            totalBalance - todayBalance,
+            0
+        );
 
-        const currentLocalDate = date && date.trim() !== '' ? date.trim() : null;
+        // 4. Kuhifadhi au kusasisha rasmi kwenye database
+        const currentLocalDate = targetDate && targetDate.trim() !== '' ? targetDate.trim() : null;
         const upsertBalanceQuery = `
             INSERT INTO daily_previous_balances (balance_date, previous_balance, total_balance)
             VALUES (COALESCE(${currentLocalDate ? `'${currentLocalDate}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`}), $1, $2)
@@ -769,13 +807,14 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             total_deposited: totalDepositedToday,
             today_balance: todayBalance,
             previous_balance: previousBalanceDisplay,
+            total_balance: totalBalance,
             total: totalBalance,
             balance: totalBalance
         });
     } catch (err) {
         console.error("Daily Sales Error:", err.message);
         return res.status(500).json({
-            cash_sales: 0, lipanamba_sales: 0, gross_total: 0, total_deposited: 0, today_balance: 0, previous_balance: 0, total: 0, balance: 0
+            cash_sales: 0, lipanamba_sales: 0, gross_total: 0, total_deposited: 0, today_balance: 0, previous_balance: 0, total_balance: 0, total: 0, balance: 0
         });
     }
 });
