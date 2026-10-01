@@ -132,14 +132,11 @@ const initDb = async () => {
         `);
 
         // Hakikisha 'daily_previous_balances' ina UNIQUE constraint kwenye balance_date.
-        // Bila hii, 'ON CONFLICT (balance_date)' inayotumika kwenye /api/finance/daily-sales
-        // inarusha hitilafu kila wakati (hasa kwa majedwali yaliyoundwa kabla ya safu hii
-        // kuongezwa kikamilifu kwenye mfumo) - hivyo Cash/Lipa Namba/Balance zote zinaonekana 0.
         try {
             await db.query(`ALTER TABLE daily_previous_balances ADD CONSTRAINT daily_previous_balances_balance_date_unique UNIQUE (balance_date)`);
             console.log('✅ UNIQUE constraint ya balance_date imethibitishwa!');
         } catch (constraintErr) {
-            // Tayari ipo (jina hili au jingine linalotoa ukomo uleule) - si tatizo, endelea.
+            // Tayari ipo - endelea.
         }
 
         console.log("Database tables initialized successfully!");
@@ -748,19 +745,9 @@ app.get('/api/finance/daily-sales', async (req, res) => {
             previousBalanceBase = parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0);
         }
 
-        // KIASI HALISI CHA LEO: kinaweza kuwa hasi endapo kiasi kilichowekwa Benki
-        // (deposited) kimezidi mauzo ya leo (gross) - ziada hiyo INAPASWA kupunguza
-        // Balance Iliyopita (carry-forward), siyo kupotea tu kwa ku-floor kwenye 0.
         const rawTodayNet = grossTotal - totalDepositedToday;
-
-        // Jumla ya Balance = Iliyopita (msingi) + Kiasi halisi cha leo (hasi au chanya)
         const totalBalance = Math.max(previousBalanceBase + rawTodayNet, 0);
-
-        // Balance ya LEO haionyeshwi chini ya sifuri kamwe
         const todayBalance = Math.max(rawTodayNet, 0);
-
-        // Balance ILIYOPITA inayoonyeshwa = Jumla - Leo (hivyo ziada ya malipo ya leo
-        // inapunguza hii moja kwa moja, kama ilivyoainishwa)
         const previousBalanceDisplay = Math.max(totalBalance - todayBalance, 0);
 
         const currentLocalDate = date && date.trim() !== '' ? date.trim() : null;
@@ -1060,9 +1047,9 @@ app.get('/api/reports/stock-issues', async (req, res) => {
     }
 });
 
-app.get('/api/reports/procured-items', async (resq, res) => {
+app.get('/api/reports/procured-items', async (req, res) => {
     try {
-        const { startDate, endDate } = resq.query;
+        const { startDate, endDate } = req.query;
         let query = "SELECT * FROM requisitions WHERE LOWER(status) IN ('procured', 'approved_principal')";
         const params = [];
 
