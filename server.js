@@ -1071,6 +1071,24 @@ app.get('/feedback', (req, res) => {
     res.sendFile(__dirname + '/feedback.html');
 });
 
+// Njia ya kupokea na kuhifadhi maoni ya wateja
+app.post('/api/feedback', async (req, res) => {
+    try {
+        const { customerName, rating, comments } = req.body;
+        
+        // Hifadhi kwenye database yako ya Supabase
+        await db.query(
+            'INSERT INTO feedbacks (customer_name, rating, comments) VALUES ($1, $2, $3)',
+            [customerName || 'Mgeni', rating, comments]
+        );
+
+        return res.status(200).json({ success: true, message: 'Maoni yamepokelewa kikamilifu!' });
+    } catch (err) {
+        console.error('Hitilafu kwenye maoni:', err.message);
+        return res.status(500).json({ success: false, message: 'Imeshindwa kutuma maoni.' });
+    }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on Port ${PORT}`);
 });
