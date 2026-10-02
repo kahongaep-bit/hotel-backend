@@ -117,6 +117,14 @@ const initDb = async () => {
                 pending_orders INT DEFAULT 0,
                 handed_over_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS feedbacks (
+                id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(100) DEFAULT 'Mteja',
+                rating VARCHAR(50),
+                comment TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
 
         await db.query(`
@@ -260,6 +268,7 @@ app.get('/api/reset-all-data-completely', async (req, res) => {
         await db.query('DELETE FROM sub_stock');
         await db.query('DELETE FROM main_stock');
         await db.query('DELETE FROM requisitions');
+        await db.query('DELETE FROM feedbacks');
         
         return res.status(200).json({ 
             message: "Data zote, stoo, na historia zimefutwa kikamilifu!", 
@@ -1071,15 +1080,15 @@ app.get('/feedback', (req, res) => {
     res.sendFile(__dirname + '/feedback.html');
 });
 
-// Njia ya kupokea na kuhifadhi maoni ya wateja
+// Njia ya kupokea na kuhifadhi maoni ya wateja (Imerekebishwa kuendana na feedback.html)
 app.post('/api/feedback', async (req, res) => {
     try {
-        const { customerName, rating, comments } = req.body;
+        const { customer_name, rating, comment } = req.body;
         
         // Hifadhi kwenye database yako ya Supabase
         await db.query(
-            'INSERT INTO feedbacks (customer_name, rating, comments) VALUES ($1, $2, $3)',
-            [customerName || 'Mgeni', rating, comments]
+            'INSERT INTO feedbacks (customer_name, rating, comment) VALUES ($1, $2, $3)',
+            [customer_name || 'Mteja', rating, comment]
         );
 
         return res.status(200).json({ success: true, message: 'Maoni yamepokelewa kikamilifu!' });
