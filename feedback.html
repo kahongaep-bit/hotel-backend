@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="sw">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maoni ya Mteja - Hotel Feedback</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #F7FAFC;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .card {
+            background: #FFFFFF;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+        .lang-switch {
+            text-align: right;
+            margin-bottom: 12px;
+        }
+        .lang-switch button {
+            background: #E2E8F0;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: bold;
+            color: #4A5568;
+        }
+        .lang-switch button.active {
+            background: #3182CE;
+            color: white;
+        }
+        h2 {
+            color: #2C5282;
+            text-align: center;
+            margin-bottom: 6px;
+            font-size: 20px;
+        }
+        p.subtitle {
+            text-align: center;
+            color: #718096;
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 14px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #4A5568;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #CBD5E0;
+            border-radius: 6px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        textarea {
+            resize: vertical;
+            height: 90px;
+        }
+        .btn-submit {
+            width: 100%;
+            background-color: #3182CE;
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .btn-submit:hover {
+            background-color: #2B6CB0;
+        }
+        #successMsg {
+            display: none;
+            text-align: center;
+            color: #38A169;
+            font-weight: bold;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <!-- Vitufe vya kuchagua Lugha -->
+        <div class="lang-switch">
+            <button type="button" id="btnSw" class="active" onclick="setLanguage('sw')">Kiswahili</button>
+            <button type="button" id="btnEn" onclick="setLanguage('en')">English</button>
+        </div>
+
+        <h2 id="uiTitle">🏨 Karibu Hoteli Yetu</h2>
+        <p class="subtitle" id="uiSubtitle">Tafadhali tuachie maoni au tathmini yako ili tuzidi kuboresha huduma.</p>
+        
+        <form id="feedbackForm">
+            <div class="form-group">
+                <label for="customerName" id="lblCustomerName">Jina lako (Si lazima):</label>
+                <input type="text" id="customerName" placeholder="Mfano: Juma Ally">
+            </div>
+
+            <div class="form-group">
+                <label for="rating" id="lblRating">Tathmini / Nyota:</label>
+                <select id="rating" required>
+                    <option value="⭐⭐⭐⭐⭐">⭐⭐⭐⭐⭐ (Vizuri sana / Excellent)</option>
+                    <option value="⭐⭐⭐⭐">⭐⭐⭐⭐ (Vizuri / Good)</option>
+                    <option value="⭐⭐⭐">⭐⭐⭐ (Wastani / Average)</option>
+                    <option value="⭐⭐">⭐⭐ (Vibaya kidogo / Poor)</option>
+                    <option value="⭐">⭐ (Vibaya sana / Very Bad)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="comment" id="lblComment">Maoni yako:</label>
+                <textarea id="comment" placeholder="Andika maoni, ushauri au malalamiko yako hapa..." required></textarea>
+            </div>
+
+            <button type="submit" id="submitBtn" class="btn-submit">TUMA MAONI</button>
+            <div id="successMsg">✅ Asante sana! Maoni yako yametumwa kwa uongozi.</div>
+        </form>
+    </div>
+
+    <script>
+        // Lugha dictionary
+        const texts = {
+            sw: {
+                title: "🏨 Karibu Hoteli Yetu",
+                subtitle: "Tafadhali tuachie maoni au tathmini yako ili tuzidi kuboresha huduma.",
+                lblCustomerName: "Jina lako (Si lazima):",
+                placeholderName: "Mfano: Juma Ally",
+                lblRating: "Tathmini / Nyota:",
+                lblComment: "Maoni yako:",
+                placeholderComment: "Andika maoni, ushauri au malalamiko yako hapa...",
+                submitBtn: "TUMA MAONI",
+                sendingBtn: "Inatuma...",
+                successMsg: "✅ Asante sana! Maoni yako yametumwa kwa uongozi.",
+                errorMsg: "Imeshindwa kutuma maoni. Tafadhali jaribu tena.",
+                netError: "Hitilafu ya mtandao: "
+            },
+            en: {
+                title: "🏨 Welcome to Our Hotel",
+                subtitle: "Please leave your feedback or rating to help us improve our services.",
+                lblCustomerName: "Your Name (Optional):",
+                placeholderName: "E.g., John Doe",
+                lblRating: "Rating / Stars:",
+                lblComment: "Your Feedback / Comments:",
+                placeholderComment: "Write your comments, suggestions, or complaints here...",
+                submitBtn: "SUBMIT FEEDBACK",
+                sendingBtn: "Sending...",
+                successMsg: "✅ Thank you very much! Your feedback has been sent to management.",
+                errorMsg: "Failed to send feedback. Please try again.",
+                netError: "Network error: "
+            }
+        };
+
+        let currentLang = 'sw';
+
+        function setLanguage(lang) {
+            currentLang = lang;
+            document.getElementById('btnSw').className = lang === 'sw' ? 'active' : '';
+            document.getElementById('btnEn').className = lang === 'en' ? 'active' : '';
+
+            document.getElementById('uiTitle').innerText = texts[lang].title;
+            document.getElementById('uiSubtitle').innerText = texts[lang].subtitle;
+            document.getElementById('lblCustomerName').innerText = texts[lang].lblCustomerName;
+            document.getElementById('customerName').placeholder = texts[lang].placeholderName;
+            document.getElementById('lblRating').innerText = texts[lang].lblRating;
+            document.getElementById('lblComment').innerText = texts[lang].lblComment;
+            document.getElementById('comment').placeholder = texts[lang].placeholderComment;
+            document.getElementById('submitBtn').innerText = texts[lang].submitBtn;
+            document.getElementById('successMsg').innerText = texts[lang].successMsg;
+        }
+
+        document.getElementById('feedbackForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.innerText = texts[currentLang].sendingBtn;
+
+            const data = {
+                customer_name: document.getElementById('customerName').value || (currentLang === 'sw' ? "Mteja" : "Customer"),
+                rating: document.getElementById('rating').value,
+                comment: document.getElementById('comment').value
+            };
+
+            try {
+                const response = await fetch('https://hotel-backend-production-617c.up.railway.app/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    document.getElementById('feedbackForm').reset();
+                    document.getElementById('successMsg').style.display = 'block';
+                    btn.style.display = 'none';
+                } else {
+                    alert(texts[currentLang].errorMsg);
+                    btn.disabled = false;
+                    btn.innerText = texts[currentLang].submitBtn;
+                }
+            } catch (err) {
+                alert(texts[currentLang].netError + err.message);
+                btn.disabled = false;
+                btn.innerText = texts[currentLang].submitBtn;
+            }
+        });
+    </script>
+</body>
+</html>
