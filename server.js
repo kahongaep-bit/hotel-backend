@@ -9,6 +9,8 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(__dirname));
 
 // INITIALIZE DATABASE TABLES
 const initDb = async () => {
@@ -120,7 +122,7 @@ const initDb = async () => {
 
             CREATE TABLE IF NOT EXISTS feedbacks (
                 id SERIAL PRIMARY KEY,
-                customer_name VARCHAR(100) DEFAULT 'Mteja',
+                customer_name VARCHAR(100) DEFAULT 'Mgeni',
                 rating VARCHAR(50),
                 comment TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1080,15 +1082,14 @@ app.get('/feedback', (req, res) => {
     res.sendFile(__dirname + '/feedback.html');
 });
 
-// Njia ya kupokea na kuhifadhi maoni ya wateja (Imerekebishwa kuendana na feedback.html)
+// Njia ya kupokea na kuhifadhi maoni ya wateja (Imerekebishwa iwe 'comment' kuendana na Supabase)
 app.post('/api/feedback', async (req, res) => {
     try {
-        const { customer_name, rating, comment } = req.body;
+        const { customerName, rating, comments } = req.body;
         
-        // Hifadhi kwenye database yako ya Supabase
         await db.query(
             'INSERT INTO feedbacks (customer_name, rating, comment) VALUES ($1, $2, $3)',
-            [customer_name || 'Mteja', rating, comment]
+            [customerName || 'Mgeni', rating, comments]
         );
 
         return res.status(200).json({ success: true, message: 'Maoni yamepokelewa kikamilifu!' });
