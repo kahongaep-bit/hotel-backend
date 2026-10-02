@@ -1082,14 +1082,15 @@ app.get('/feedback', (req, res) => {
     res.sendFile(__dirname + '/feedback.html');
 });
 
-// Njia ya kupokea na kuhifadhi maoni ya wateja (Imerekebishwa iwe 'comment' kuendana na Supabase)
+// Njia ya kupokea na kuhifadhi maoni ya wateja
 app.post('/api/feedback', async (req, res) => {
     try {
-        const { customerName, rating, comments } = req.body;
+        const { customer_name, rating, comment } = req.body;
         
+        // Hifadhi kwenye database ya Supabase
         await db.query(
             'INSERT INTO feedbacks (customer_name, rating, comment) VALUES ($1, $2, $3)',
-            [customerName || 'Mgeni', rating, comments]
+            [customer_name || 'Mgeni', rating, comment]
         );
 
         return res.status(200).json({ success: true, message: 'Maoni yamepokelewa kikamilifu!' });
