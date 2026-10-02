@@ -1066,6 +1066,11 @@ app.get('/api/reports/procured-items', async (req, res) => {
     }
 });
 
+// Njia ya kufungua fomu ya maoni ya wateja
+app.get('/feedback', (req, res) => {
+    res.sendFile(__dirname + '/feedback.html');
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on Port ${PORT}`);
 });
