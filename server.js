@@ -1100,6 +1100,21 @@ app.post('/api/feedback', async (req, res) => {
     }
 });
 
+// Njia ya KUSOMA/KUTOA maoni yote ya wateja (kwa ajili ya Principal, Production
+// Coordinator, Hotel Manager kuyaona kwenye app) - hii ndiyo iliyokuwa haipo kabisa,
+// ndiyo sababu maoni yalikuwa "hayafiki" licha ya kutumwa kikamilifu.
+app.get('/api/feedback', async (req, res) => {
+    try {
+        const result = await db.query(
+            `SELECT id, customer_name, rating, comment, TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI') as created_at 
+             FROM feedbacks ORDER BY id DESC`
+        );
+        return res.status(200).json(result.rows);
+    } catch (err) {
+        return res.status(500).json({ message: "Error: " + err.message });
+    }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on Port ${PORT}`);
 });
