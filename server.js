@@ -604,6 +604,28 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
+/*
+================================================================================
+ UPDATE ORDER STATUS + STOCK DEDUCTION LOGIC
+================================================================================
+ 1) BAR (Vinywaji) - jina la oda linalinganishwa moja kwa moja na majina
+    yaliyopo kwenye Substore ya Bar. Likilingana, kinywaji hicho kinapunguzwa
+    Substore kwa ratio 1:1.
+
+ 2) VYAKULA VIKUU (Kuku / Nyama / Samaki) - vinatambulika kwa majina yao
+    (kuku/chicken, nyama/beef/ng'ombe/mbuzi, samaki/fish) na VINAJITEGEMEA:
+    kila kimoja kinapungua TU pale kinapoagizwa chenyewe, kwa ratio yake
+    binafsi kutoka Requisitions:
+        Kiasi kilichotumika = Oda zilizoagizwa / Ratio yake
+
+ 3) VYAKULA VINGINE VYOTE VYA JIKONI (Wali, Ugali, Ndizi, Mboga, Nyanya,
+    Vitunguu, Chumvi, n.k) - kitu chochote cha Substore ya Jikoni ambacho
+    SIYO Kuku/Nyama/Samaki kinahesabiwa kama "kiungo/side" na kinapungua
+    kila mara vyakula vikuu vinapoagizwa, kwa kutumia JUMLA ya KIASI cha
+    vyakula vikuu vilivyotumika, kikigawanywa kwa ratio ya hicho kiungo:
+        Deduction ya kiungo = (Jumla ya kiasi cha vikuu vilivyotumika) / Ratio yake
+================================================================================
+*/
 app.put('/api/orders/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -623,17 +645,109 @@ app.put('/api/orders/:id/status', async (req, res) => {
             if (Array.isArray(itemsArr)) {
                 const allSubStockRes = await db.query('SELECT * FROM sub_stock');
                 const barStock = allSubStockRes.rows.filter(r => (r.department || '').toLowerCase().includes('bar'));
+                const jikoniStock = allSubStockRes.rows.filter(r => (r.department || '').toLowerCase().includes('jikoni'));
+
+                // Utambuzi wa vyakula vikuu: Kuku/Nyama/Samaki (Kiswahili na Kiingereza)
+                const isMainProteinName = (rawName) => {
+                    const n = (rawName || '').toLowerCase();
+                    const isChicken = n.includes('kuku') || n.includes('chicken');
+                    const isBeef = n.includes('nyama') || n.includes('beef') || n.includes('ng\'ombe') || n.includes('mbuzi');
+                    const isFish = n.includes('samaki') || n.includes('fish');
+                    return isChicken || isBeef || isFish;
+                };
+
+                // Tafuta ratio_per_unit ya kitu husika kutoka Requisitions
+                const getRatioForJikoniItem = async (stockItemName) => {
+                    let reqRes = await db.query(
+                        `SELECT ratio_per_unit FROM requisitions 
+                         WHERE LOWER(TRIM(item_name)) = LOWER(TRIM($1)) 
+                         AND LOWER(TRIM(department)) LIKE '%jikoni%' 
+                         ORDER BY id DESC LIMIT 1`,
+                        [stockItemName]
+                    );
+                    if (reqRes.rows.length === 0) {
+                        reqRes = await db.query(
+                            `SELECT ratio_per_unit FROM requisitions 
+                             WHERE (LOWER(item_name) LIKE '%' || LOWER(TRIM($1)) || '%' OR LOWER(TRIM($1)) LIKE '%' || LOWER(item_name) || '%')
+                             AND LOWER(TRIM(department)) LIKE '%jikoni%' 
+                             ORDER BY id DESC LIMIT 1`,
+                            [stockItemName]
+                        );
+                    }
+                    let ratio = 1.0;
+                    if (reqRes.rows.length > 0 && parseFloat(reqRes.rows[0].ratio_per_unit) > 0) {
+                        ratio = parseFloat(reqRes.rows[0].ratio_per_unit);
+                    }
+                    return ratio;
+                };
+
+                let totalProteinConsumed = 0;
+                const proteinDeductions = {};
 
                 for (const item of itemsArr) {
                     const itemName = (item.name || '').toLowerCase().trim();
                     const orderedQty = parseFloat(item.quantity) || 1;
                     if (itemName === '') continue;
 
+                    // 1) BAR kwanza (ratio 1:1)
+                    let matchedInBar = false;
                     for (const stockItem of barStock) {
                         const stockNameLower = stockItem.item_name.toLowerCase().trim();
-                        if (stockNameLower === itemName || stockNameLower.includes(itemName) || itemName.includes(stockNameLower)) {
-                            await db.query(`UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`, [orderedQty, stockItem.id]);
+                        if (
+                            stockNameLower === itemName ||
+                            stockNameLower.includes(itemName) ||
+                            itemName.includes(stockNameLower)
+                        ) {
+                            await db.query(
+                                `UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
+                                [orderedQty, stockItem.id]
+                            );
+                            matchedInBar = true;
                             break;
+                        }
+                    }
+                    if (matchedInBar) continue;
+
+                    // 2) Vyakula vikuu vya Jikoni (Kuku/Nyama/Samaki) - vinajitegemea
+                    for (const stockItem of jikoniStock) {
+                        if (!isMainProteinName(stockItem.item_name)) continue;
+                        const stockNameLower = stockItem.item_name.toLowerCase().trim();
+                        if (
+                            stockNameLower === itemName ||
+                            stockNameLower.includes(itemName) ||
+                            itemName.includes(stockNameLower)
+                        ) {
+                            const ratio = await getRatioForJikoniItem(stockItem.item_name);
+                            const consumed = orderedQty / ratio;
+                            proteinDeductions[stockItem.id] = (proteinDeductions[stockItem.id] || 0) + consumed;
+                            totalProteinConsumed += consumed;
+                        }
+                    }
+                }
+
+                // 3) Punguza vyakula vikuu vilivyoagizwa (kila kimoja peke yake)
+                for (const stockId of Object.keys(proteinDeductions)) {
+                    const amount = proteinDeductions[stockId];
+                    if (amount > 0) {
+                        await db.query(
+                            `UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
+                            [amount, stockId]
+                        );
+                    }
+                }
+
+                // 4) Punguza VYAKULA VINGINE VYOTE VYA JIKONI kwa kutumia JUMLA ya
+                //    vyakula vikuu vilivyotumika, kila kimoja kwa ratio yake binafsi
+                if (totalProteinConsumed > 0) {
+                    for (const stockItem of jikoniStock) {
+                        if (isMainProteinName(stockItem.item_name)) continue;
+                        const ratio = await getRatioForJikoniItem(stockItem.item_name);
+                        const deduction = totalProteinConsumed / ratio;
+                        if (deduction > 0) {
+                            await db.query(
+                                `UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
+                                [deduction, stockItem.id]
+                            );
                         }
                     }
                 }
