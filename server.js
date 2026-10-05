@@ -141,13 +141,10 @@ const initDb = async () => {
             ALTER TABLE daily_previous_balances ADD COLUMN IF NOT EXISTS total_balance NUMERIC DEFAULT 0;
         `);
 
-        // Hakikisha 'daily_previous_balances' ina UNIQUE constraint kwenye balance_date.
         try {
             await db.query(`ALTER TABLE daily_previous_balances ADD CONSTRAINT daily_previous_balances_balance_date_unique UNIQUE (balance_date)`);
             console.log('✅ UNIQUE constraint ya balance_date imethibitishwa!');
-        } catch (constraintErr) {
-            // Tayari ipo - endelea.
-        }
+        } catch (constraintErr) {}
 
         console.log("Database tables initialized successfully!");
         
@@ -259,7 +256,6 @@ app.delete('/api/admin/users/:id', async (req, res) => {
     }
 });
 
-// ROUTE YA KUFUTA AU KURESET DATA ZOTE KIKAMILIFU
 app.get('/api/reset-all-data-completely', async (req, res) => {
     try {
         await db.query('DELETE FROM orders');
@@ -504,7 +500,7 @@ app.post('/api/requisitions', async (req, res) => {
         const result = await db.query(
             `INSERT INTO requisitions (item_name, quantity, unit, department, requested_by, ratio_per_unit, total_portions, status) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *`,
-            [item_name, quantity, unit || 'Pc', department || 'Jikoni', requested_by || 'Hotel Manager', ratio_per_unit || 1, total_portions || quantity]
+            [item_name, parseFloat(quantity || 0).toFixed(2), unit || 'Pc', department || 'Jikoni', requested_by || 'Hotel Manager', ratio_per_unit || 1, total_portions || quantity]
         );
         return res.status(201).json({ message: "Ombi limetumwa!", requisition: result.rows[0], status: true });
     } catch (err) {
@@ -517,6 +513,7 @@ app.put('/api/requisitions/:id', async (req, res) => {
         const { id } = req.params;
         const { item_name, quantity, unit, department, supplier, estimated_cost, ratio_per_unit, total_portions, status } = req.body;
         const newStatus = status || 'Pending';
+        const formattedQty = quantity ? parseFloat(quantity).toFixed(2) : null;
 
         const result = await db.query(
             `UPDATE requisitions 
@@ -525,7 +522,7 @@ app.put('/api/requisitions/:id', async (req, res) => {
                  ratio_per_unit = COALESCE($7, ratio_per_unit), total_portions = COALESCE($8, total_portions),
                  status = $9, rejection_comment = NULL
              WHERE id = $10 RETURNING *`,
-            [item_name || null, quantity || null, unit || null, department || null, supplier || null, estimated_cost || null, ratio_per_unit || null, total_portions || null, newStatus, id]
+            [item_name || null, formattedQty, unit || null, department || null, supplier || null, estimated_cost || null, ratio_per_unit || null, total_portions || null, newStatus, id]
         );
 
         if (result.rows.length === 0) return res.status(404).json({ message: "Ombi halikupatikana!", status: false });
@@ -604,28 +601,6 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
-/*
-================================================================================
- UPDATE ORDER STATUS + STOCK DEDUCTION LOGIC
-================================================================================
- 1) BAR (Vinywaji) - jina la oda linalinganishwa moja kwa moja na majina
-    yaliyopo kwenye Substore ya Bar. Likilingana, kinywaji hicho kinapunguzwa
-    Substore kwa ratio 1:1.
-
- 2) VYAKULA VIKUU (Kuku / Nyama / Samaki) - vinatambulika kwa majina yao
-    (kuku/chicken, nyama/beef/ng'ombe/mbuzi, samaki/fish) na VINAJITEGEMEA:
-    kila kimoja kinapungua TU pale kinapoagizwa chenyewe, kwa ratio yake
-    binafsi kutoka Requisitions:
-        Kiasi kilichotumika = Oda zilizoagizwa / Ratio yake
-
- 3) VYAKULA VINGINE VYOTE VYA JIKONI (Wali, Ugali, Ndizi, Mboga, Nyanya,
-    Vitunguu, Chumvi, n.k) - kitu chochote cha Substore ya Jikoni ambacho
-    SIYO Kuku/Nyama/Samaki kinahesabiwa kama "kiungo/side" na kinapungua
-    kila mara vyakula vikuu vinapoagizwa, kwa kutumia JUMLA ya KIASI cha
-    vyakula vikuu vilivyotumika, kikigawanywa kwa ratio ya hicho kiungo:
-        Deduction ya kiungo = (Jumla ya kiasi cha vikuu vilivyotumika) / Ratio yake
-================================================================================
-*/
 app.put('/api/orders/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -647,7 +622,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                 const barStock = allSubStockRes.rows.filter(r => (r.department || '').toLowerCase().includes('bar'));
                 const jikoniStock = allSubStockRes.rows.filter(r => (r.department || '').toLowerCase().includes('jikoni'));
 
-                // Utambuzi wa vyakula vikuu: Kuku/Nyama/Samaki (Kiswahili na Kiingereza)
                 const isMainProteinName = (rawName) => {
                     const n = (rawName || '').toLowerCase();
                     const isChicken = n.includes('kuku') || n.includes('chicken');
@@ -656,7 +630,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     return isChicken || isBeef || isFish;
                 };
 
-                // Tafuta ratio_per_unit ya kitu husika kutoka Requisitions
                 const getRatioForJikoniItem = async (stockItemName) => {
                     let reqRes = await db.query(
                         `SELECT ratio_per_unit FROM requisitions 
@@ -689,7 +662,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     const orderedQty = parseFloat(item.quantity) || 1;
                     if (itemName === '') continue;
 
-                    // 1) BAR kwanza (ratio 1:1)
                     let matchedInBar = false;
                     for (const stockItem of barStock) {
                         const stockNameLower = stockItem.item_name.toLowerCase().trim();
@@ -698,9 +670,10 @@ app.put('/api/orders/:id/status', async (req, res) => {
                             stockNameLower.includes(itemName) ||
                             itemName.includes(stockNameLower)
                         ) {
+                            const newQty = Math.max(0, parseFloat(stockItem.quantity) - orderedQty).toFixed(2);
                             await db.query(
-                                `UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
-                                [orderedQty, stockItem.id]
+                                `UPDATE sub_stock SET quantity = $1 WHERE id = $2`,
+                                [newQty, stockItem.id]
                             );
                             matchedInBar = true;
                             break;
@@ -708,7 +681,6 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     }
                     if (matchedInBar) continue;
 
-                    // 2) Vyakula vikuu vya Jikoni (Kuku/Nyama/Samaki) - vinajitegemea
                     for (const stockItem of jikoniStock) {
                         if (!isMainProteinName(stockItem.item_name)) continue;
                         const stockNameLower = stockItem.item_name.toLowerCase().trim();
@@ -725,28 +697,32 @@ app.put('/api/orders/:id/status', async (req, res) => {
                     }
                 }
 
-                // 3) Punguza vyakula vikuu vilivyoagizwa (kila kimoja peke yake)
                 for (const stockId of Object.keys(proteinDeductions)) {
                     const amount = proteinDeductions[stockId];
                     if (amount > 0) {
-                        await db.query(
-                            `UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
-                            [amount, stockId]
-                        );
+                        const stockRes = await db.query('SELECT quantity FROM sub_stock WHERE id = $1', [stockId]);
+                        if (stockRes.rows.length > 0) {
+                            const currentQty = parseFloat(stockRes.rows[0].quantity) || 0;
+                            const newQty = Math.max(0, currentQty - amount).toFixed(2);
+                            await db.query(
+                                `UPDATE sub_stock SET quantity = $1 WHERE id = $2`,
+                                [newQty, stockId]
+                            );
+                        }
                     }
                 }
 
-                // 4) Punguza VYAKULA VINGINE VYOTE VYA JIKONI kwa kutumia JUMLA ya
-                //    vyakula vikuu vilivyotumika, kila kimoja kwa ratio yake binafsi
                 if (totalProteinConsumed > 0) {
                     for (const stockItem of jikoniStock) {
                         if (isMainProteinName(stockItem.item_name)) continue;
                         const ratio = await getRatioForJikoniItem(stockItem.item_name);
                         const deduction = totalProteinConsumed / ratio;
                         if (deduction > 0) {
+                            const currentQty = parseFloat(stockItem.quantity) || 0;
+                            const newQty = Math.max(0, currentQty - deduction).toFixed(2);
                             await db.query(
-                                `UPDATE sub_stock SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
-                                [deduction, stockItem.id]
+                                `UPDATE sub_stock SET quantity = $1 WHERE id = $2`,
+                                [newQty, stockItem.id]
                             );
                         }
                     }
@@ -1007,13 +983,13 @@ app.get('/api/finance/reports', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         let salesQuery = `SELECT COALESCE(SUM(total_amount), 0) AS total_sales, COUNT(id) AS total_orders, COALESCE(SUM(CASE WHEN LOWER(TRIM(payment_method)) LIKE '%cash%' THEN total_amount ELSE 0 END), 0) AS cash_sales, COALESCE(SUM(CASE WHEN LOWER(TRIM(payment_method)) NOT LIKE '%cash%' THEN total_amount ELSE 0 END), 0) AS lipanamba_sales FROM orders WHERE LOWER(status) NOT LIKE '%rejected_by%'`;
-        let depositQuery = `SELECT COALESCE(SUM(total_amount), 0) AS total_deposits FROM bank_deposits WHERE 1=1`;
+        let depositQuery = `SELECT COALESCE(SUM(total_amount), 0) AS total_deposits, COALESCE(SUM(breakfast_amount), 0) AS breakfast_deposits, COALESCE(SUM(lunch_amount), 0) AS lunch_deposits, COALESCE(SUM(dinner_amount), 0) AS dinner_deposits, COALESCE(SUM(drinks_amount), 0) AS drinks_deposits, COALESCE(SUM(rooms_amount), 0) AS rooms_deposits FROM bank_deposits WHERE 1=1`;
 
         const queryParams = [];
-        if (startDate && endDate) {
+        if (startDate && endDate && startDate.trim() !== '' && endDate.trim() !== '') {
             salesQuery += ` AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date >= $1 AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date <= $2`;
             depositQuery += ` AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date >= $1 AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date <= $2`;
-            queryParams.push(startDate, endDate);
+            queryParams.push(startDate.trim(), endDate.trim());
         }
 
         const salesRes = await db.query(salesQuery, queryParams);
@@ -1034,6 +1010,11 @@ app.get('/api/finance/reports', async (req, res) => {
             lipanamba_sales: lipanambaSales,
             total_orders: parseInt(s.total_orders || 0),
             total_deposits: totalDeposits,
+            breakfast_deposits: parseFloat(d.breakfast_deposits || 0),
+            lunch_deposits: parseFloat(d.lunch_deposits || 0),
+            dinner_deposits: parseFloat(d.dinner_deposits || 0),
+            drinks_deposits: parseFloat(d.drinks_deposits || 0),
+            rooms_deposits: parseFloat(d.rooms_deposits || 0),
             balance: balance
         });
     } catch (err) {
@@ -1067,11 +1048,17 @@ app.post('/api/finance/bank-deposit', async (req, res) => {
     }
 });
 
-// STOCK & REPORTS
+// STOCK & REPORTS (Mhasibu anaruhusiwa kuona Main na Sub Store kikamilifu)
 app.get('/api/stock/main', async (req, res) => {
     try {
-        const result = await db.query('SELECT * FROM main_stock ORDER BY id DESC');
-        return res.status(200).json(result.rows);
+        const result = await db.query('SELECT id, item_name, quantity, unit, unit_price, total_cost, supplier, TO_CHAR(created_at, \'YYYY-MM-DD HH24:MI\') as created_at FROM main_stock ORDER BY id DESC');
+        const formattedRows = result.rows.map(r => ({
+            ...r,
+            quantity: parseFloat(r.quantity || 0).toFixed(2),
+            unit_price: parseFloat(r.unit_price || 0).toFixed(2),
+            total_cost: parseFloat(r.total_cost || 0).toFixed(2)
+        }));
+        return res.status(200).json(formattedRows);
     } catch (err) {
         return res.status(500).json({ message: err.message });
     }
@@ -1080,15 +1067,19 @@ app.get('/api/stock/main', async (req, res) => {
 app.post('/api/stock/main', async (req, res) => {
     try {
         const { item_name, quantity, unit, unit_price, total_cost, supplier } = req.body;
-        const qtyVal = parseFloat(quantity) || 0;
-        const priceVal = parseFloat(unit_price) || 0;
-        const totalVal = parseFloat(total_cost) || (qtyVal * priceVal);
+        const qtyVal = parseFloat(quantity || 0);
+        const priceVal = parseFloat(unit_price || 0);
+        const totalVal = parseFloat(total_cost || (qtyVal * priceVal));
 
         const existing = await db.query('SELECT * FROM main_stock WHERE LOWER(TRIM(item_name)) = LOWER(TRIM($1))', [item_name]);
         if (existing.rows.length > 0) {
-            await db.query(`UPDATE main_stock SET quantity = quantity + $1, unit_price = $2, total_cost = total_cost + $3 WHERE id = $4`, [qtyVal, priceVal, totalVal, existing.rows[0].id]);
+            const currentQty = parseFloat(existing.rows[0].quantity) || 0;
+            const currentCost = parseFloat(existing.rows[0].total_cost) || 0;
+            const newQty = (currentQty + qtyVal).toFixed(2);
+            const newTotalCost = (currentCost + totalVal).toFixed(2);
+            await db.query(`UPDATE main_stock SET quantity = $1, unit_price = $2, total_cost = $3 WHERE id = $4`, [newQty, priceVal, newTotalCost, existing.rows[0].id]);
         } else {
-            await db.query(`INSERT INTO main_stock (item_name, quantity, unit, unit_price, total_cost, supplier) VALUES ($1, $2, $3, $4, $5, $6)`, [item_name.trim(), qtyVal, unit || 'Pc', priceVal, totalVal, supplier || null]);
+            await db.query(`INSERT INTO main_stock (item_name, quantity, unit, unit_price, total_cost, supplier) VALUES ($1, $2, $3, $4, $5, $6)`, [item_name.trim(), qtyVal.toFixed(2), unit || 'Pc', priceVal, totalVal, supplier || null]);
         }
         return res.status(201).json({ message: "Stoki imeingizwa!", status: true });
     } catch (err) {
@@ -1106,7 +1097,11 @@ app.get('/api/stock/sub', async (req, res) => {
             params.push(`%${department.toLowerCase()}%`);
         }
         const result = await db.query(query, params);
-        return res.status(200).json(result.rows);
+        const formattedRows = result.rows.map(r => ({
+            ...r,
+            quantity: parseFloat(r.quantity || 0).toFixed(2)
+        }));
+        return res.status(200).json(formattedRows);
     } catch (err) {
         return res.status(500).json({ message: err.message });
     }
@@ -1115,7 +1110,7 @@ app.get('/api/stock/sub', async (req, res) => {
 app.post('/api/stock/issue-substore', async (req, res) => {
     try {
         const { item_name, quantity, department } = req.body;
-        const issueQty = parseFloat(quantity) || 0;
+        const issueQty = parseFloat(quantity || 0);
         if (!item_name || issueQty <= 0) return res.status(400).json({ message: "Ingiza taarifa sahihi!", status: false });
 
         let mainRes = await db.query('SELECT * FROM main_stock WHERE LOWER(TRIM(item_name)) = LOWER(TRIM($1))', [item_name]);
@@ -1132,16 +1127,19 @@ app.post('/api/stock/issue-substore', async (req, res) => {
         const totalValue = issueQty * unitPrice;
         let cleanDept = (department || 'Jikoni').trim();
 
-        await db.query('UPDATE main_stock SET quantity = quantity - $1 WHERE id = $2', [issueQty, item.id]);
+        const newMainQty = Math.max(0, parseFloat(item.quantity) - issueQty).toFixed(2);
+        await db.query('UPDATE main_stock SET quantity = $1 WHERE id = $2', [newMainQty, item.id]);
 
         const subRes = await db.query('SELECT * FROM sub_stock WHERE LOWER(TRIM(item_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(department)) = LOWER(TRIM($2))', [item.item_name, cleanDept]);
         if (subRes.rows.length > 0) {
-            await db.query('UPDATE sub_stock SET quantity = quantity + $1 WHERE id = $2', [issueQty, subRes.rows[0].id]);
+            const currentSubQty = parseFloat(subRes.rows[0].quantity) || 0;
+            const newSubQty = (currentSubQty + issueQty).toFixed(2);
+            await db.query('UPDATE sub_stock SET quantity = $1 WHERE id = $2', [newSubQty, subRes.rows[0].id]);
         } else {
-            await db.query('INSERT INTO sub_stock (item_name, quantity, unit, department) VALUES ($1, $2, $3, $4)', [item.item_name.trim(), issueQty, item.unit || 'Pc', cleanDept]);
+            await db.query('INSERT INTO sub_stock (item_name, quantity, unit, department) VALUES ($1, $2, $3, $4)', [item.item_name.trim(), issueQty.toFixed(2), item.unit || 'Pc', cleanDept]);
         }
 
-        await db.query('INSERT INTO stock_issues (item_name, quantity, unit, department, total_value) VALUES ($1, $2, $3, $4, $5)', [item.item_name.trim(), issueQty, item.unit || 'Pc', cleanDept, totalValue]);
+        await db.query('INSERT INTO stock_issues (item_name, quantity, unit, department, total_value) VALUES ($1, $2, $3, $4, $5)', [item.item_name.trim(), issueQty.toFixed(2), item.unit || 'Pc', cleanDept, totalValue]);
 
         return res.status(200).json({ message: "Mzigo umetolewa kikamilifu!", status: true });
     } catch (err) {
@@ -1166,7 +1164,11 @@ app.get('/api/reports/stock-issues', async (req, res) => {
         query += ' ORDER BY id DESC';
 
         const result = await db.query(query, params);
-        return res.status(200).json(result.rows);
+        const formattedRows = result.rows.map(r => ({
+            ...r,
+            quantity: parseFloat(r.quantity || 0).toFixed(2)
+        }));
+        return res.status(200).json(formattedRows);
     } catch (err) {
         return res.status(500).json({ message: "Error: " + err.message });
     }
@@ -1185,7 +1187,11 @@ app.get('/api/reports/procured-items', async (req, res) => {
         query += " ORDER BY id DESC";
 
         const result = await db.query(query, params);
-        return res.status(200).json(result.rows);
+        const formattedRows = result.rows.map(r => ({
+            ...r,
+            quantity: parseFloat(r.quantity || 0).toFixed(2)
+        }));
+        return res.status(200).json(formattedRows);
     } catch (err) {
         return res.status(500).json({ message: "Error: " + err.message });
     }
@@ -1201,7 +1207,6 @@ app.post('/api/feedback', async (req, res) => {
     try {
         const { customer_name, rating, comment } = req.body;
         
-        // Hifadhi kwenye database ya Supabase
         await db.query(
             'INSERT INTO feedbacks (customer_name, rating, comment) VALUES ($1, $2, $3)',
             [customer_name || 'Mgeni', rating, comment]
@@ -1214,9 +1219,6 @@ app.post('/api/feedback', async (req, res) => {
     }
 });
 
-// Njia ya KUSOMA/KUTOA maoni yote ya wateja (kwa ajili ya Principal, Production
-// Coordinator, Hotel Manager kuyaona kwenye app) - hii ndiyo iliyokuwa haipo kabisa,
-// ndiyo sababu maoni yalikuwa "hayafiki" licha ya kutumwa kikamilifu.
 app.get('/api/feedback', async (req, res) => {
     try {
         const result = await db.query(
