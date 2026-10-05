@@ -781,6 +781,60 @@ app.put('/api/orders/:id/reject', async (req, res) => {
     }
 });
 
+// SHARED BALANCE CALCULATION FUNCTION (Cashier, Finance, Principal, Manager, Production)
+const getCurrentTotalBalance = async (targetDateStr) => {
+    try {
+        let dateFilterSales = "";
+        let queryParamsSales = [];
+        if (targetDateStr && targetDateStr.trim() !== '') {
+            dateFilterSales = ` AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1`;
+            queryParamsSales.push(targetDateStr.trim());
+        } else {
+            dateFilterSales = ` AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
+        }
+
+        const salesQuery = `
+            SELECT COALESCE(SUM(total_amount), 0) AS total_sales
+            FROM orders 
+            WHERE LOWER(status) NOT LIKE '%rejected_by%' ${dateFilterSales}
+        `;
+        const salesRes = await db.query(salesQuery, queryParamsSales);
+        const grossTotal = parseFloat(salesRes.rows[0].total_sales || 0);
+
+        let depositQuery = "";
+        let depositParams = [];
+        if (targetDateStr && targetDateStr.trim() !== '') {
+            depositQuery = `SELECT COALESCE(SUM(total_amount), 0) AS total_deposited FROM bank_deposits WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = $1`;
+            depositParams = [targetDateStr.trim()];
+        } else {
+            depositQuery = `SELECT COALESCE(SUM(total_amount), 0) AS total_deposited FROM bank_deposits WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
+        }
+        const depositRes = await db.query(depositQuery, depositParams);
+        const totalDepositedToday = parseFloat(depositRes.rows[0].total_deposited || 0);
+
+        const targetDateCondition = targetDateStr && targetDateStr.trim() !== '' ? `'${targetDateStr.trim()}'::date` : `(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Dar_es_Salaam')::date`;
+        const prevBalQuery = `
+            SELECT previous_balance, total_balance 
+            FROM daily_previous_balances
+            WHERE balance_date < ${targetDateCondition}
+            ORDER BY balance_date DESC
+            LIMIT 1
+        `;
+        const prevBalRes = await db.query(prevBalQuery);
+        let previousBalanceBase = 0;
+        if (prevBalRes.rows.length > 0) {
+            previousBalanceBase = parseFloat(prevBalRes.rows[0].total_balance || prevBalRes.rows[0].previous_balance || 0);
+        }
+
+        const rawTodayNet = grossTotal - totalDepositedToday;
+        const totalBalance = Math.max(previousBalanceBase + rawTodayNet, 0);
+
+        return totalBalance;
+    } catch (err) {
+        return 0;
+    }
+};
+
 // FINANCE, DAILY SALES (WITH 3 BALANCES & CARRY FORWARD LOGIC)
 app.get('/api/finance/daily-sales', async (req, res) => {
     try {
@@ -1002,7 +1056,10 @@ app.get('/api/finance/reports', async (req, res) => {
         const cashSales = parseFloat(s.cash_sales || 0);
         const lipanambaSales = parseFloat(s.lipanamba_sales || 0);
         const totalDeposits = parseFloat(d.total_deposits || 0);
-        const balance = Math.max(totalSales - totalDeposits, 0);
+        
+        // Kutumia tarehe ya mwisho kama ipo au siku ya leo kupata jumla ya salio sahihi la Cashier
+        const targetDateForBalance = (endDate && endDate.trim() !== '') ? endDate.trim() : (startDate && startDate.trim() !== '' ? startDate.trim() : null);
+        const exactCashierBalance = await getCurrentTotalBalance(targetDateForBalance);
 
         return res.status(200).json({
             total_sales: totalSales,
@@ -1015,7 +1072,7 @@ app.get('/api/finance/reports', async (req, res) => {
             dinner_deposits: parseFloat(d.dinner_deposits || 0),
             drinks_deposits: parseFloat(d.drinks_deposits || 0),
             rooms_deposits: parseFloat(d.rooms_deposits || 0),
-            balance: balance
+            balance: exactCashierBalance
         });
     } catch (err) {
         return res.status(500).json({ message: "Error: " + err.message });
